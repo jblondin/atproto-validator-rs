@@ -1,0 +1,13 @@
+{
+    "$type": "app.bsky.actor.profile",
+    "avatar": {
+        "$type": "blob",
+        "ref": {
+            "$link": "bafkreicagvf6hnut5cey6mdonrrzdru5cgrsrjaqieyliofox4fialwsma"
+        },
+        "mimeType": "image/jpeg",
+        "size": 219952
+    },
+    "description": "",
+    "displayName": "Jamie"
+}
