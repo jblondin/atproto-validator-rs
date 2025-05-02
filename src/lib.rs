@@ -63,7 +63,7 @@ pub enum Error {
     #[error("{expected} should be constant {actual}")]
     ConstMismatch { expected: String, actual: String },
     #[error("{0}")]
-    Custom(Box<dyn std::error::Error>),
+    Custom(Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Trait that providees validation against an ATProto lexicon document or subcomponent.
