@@ -45,7 +45,7 @@ pub enum Error {
     #[error("integer {0} out of bounds min_value={1:?}, max_value={2:?}")]
     IntOutOfBounds(i64, Option<i64>, Option<i64>),
     #[error("blob size {0} out of bounds min_size={1:?}, max_size={2:?}")]
-    SizeOutOfBounds(u64, Option<u32>, Option<u32>),
+    SizeOutOfBounds(u64, Option<u64>, Option<u64>),
     #[error("string length {0} outside of bounds min_length={1:?}, max_length={2:?}")]
     StrLenOutOfBounds(usize, Option<u32>, Option<u32>),
     #[error("number of graphemes {0} outside of bounds min_graphemes={1:?}, max_graphemes={2:?}")]
@@ -218,6 +218,15 @@ pub struct ObjectDef {
     pub nullable: Option<Vec<String>>,
 }
 
+impl ObjectDef {
+    pub fn requires(&self, key: impl AsRef<str>) -> bool {
+        self.required
+            .as_ref()
+            .map(|keys| keys.iter().any(|reqd| key.as_ref() == reqd))
+            .unwrap_or(false)
+    }
+}
+
 fn find_invalid_nulls(null_props: Vec<&String>, mut nullable: Vec<&String>, errs: &mut Vec<Error>) {
     // could probably sort both and two a stepwise linear search if this becomes a performance issue
     nullable.sort();
@@ -284,13 +293,13 @@ impl Validate<ObjectDef> for serde_json::Value {
     }
 }
 
-macro_rules! impl_prop_getter {
-    ($fn_name:ident, $def_type:ty, $field_def_var:path) => {
+macro_rules! impl_prop_get_val {
+    ($get_fn_name:ident, $val_fn_name:ident, $def_type:ty, $field_def_var:path) => {
         impl ObjectDef {
             /// Helper function to retrieve a specific property by name. Returns the associated
             /// object field definition ($def_type) if successful. In case of failure, records
             /// errors in `errs` Vec and returns `None`.
-            pub fn $fn_name(
+            pub fn $get_fn_name(
                 &self,
                 name: impl AsRef<str>,
                 errs: &mut Vec<Error>,
@@ -301,31 +310,93 @@ macro_rules! impl_prop_getter {
                         return Some(def);
                     }
                     Some(_) => {
-                        errs.push(Error::FieldTypeMismatch);
+                        errs.push($crate::Error::FieldTypeMismatch);
                     }
                     None => {
-                        errs.push(Error::UnexpectedField(name.to_owned()));
+                        errs.push($crate::Error::UnexpectedField(name.to_owned()));
                     }
                 }
                 None
+            }
+            pub fn $val_fn_name<'a, T>(
+                &self,
+                name: impl AsRef<str>,
+                object: impl Into<Option<&'a T>>,
+                errs: &mut Vec<Error>,
+            ) where
+                T: 'a + Validate<$def_type>,
+            {
+                let name = name.as_ref();
+                if let Some(field_def) = self.$get_fn_name(name, errs) {
+                    match object.into() {
+                        Some(object) => {
+                            object.validate(field_def, errs);
+                        }
+                        None if self.requires(name) => {
+                            errs.push($crate::Error::MissingField(name.to_owned()));
+                        }
+                        None => {}
+                    }
+                }
             }
         }
     };
 }
 
-impl_prop_getter!(get_string_prop, StringDef, ObjectFieldDef::String);
-impl_prop_getter!(get_bool_prop, BooleanDef, ObjectFieldDef::Boolean);
-impl_prop_getter!(get_int_prop, IntegerDef, ObjectFieldDef::Integer);
-impl_prop_getter!(get_bytes_prop, BytesDef, ObjectFieldDef::Bytes);
-impl_prop_getter!(get_cid_link_prop, CidLinkDef, ObjectFieldDef::CidLink);
-impl_prop_getter!(
+impl_prop_get_val!(
+    get_string_prop,
+    validate_string_prop,
+    StringDef,
+    ObjectFieldDef::String
+);
+impl_prop_get_val!(
+    get_bool_prop,
+    validate_bool_prop,
+    BooleanDef,
+    ObjectFieldDef::Boolean
+);
+impl_prop_get_val!(
+    get_int_prop,
+    validate_int_prop,
+    IntegerDef,
+    ObjectFieldDef::Integer
+);
+impl_prop_get_val!(
+    get_bytes_prop,
+    validate_bytes_prop,
+    BytesDef,
+    ObjectFieldDef::Bytes
+);
+impl_prop_get_val!(
+    get_cid_link_prop,
+    validate_cid_link_prop,
+    CidLinkDef,
+    ObjectFieldDef::CidLink
+);
+impl_prop_get_val!(
     get_array_prop,
+    validate_array_prop,
     ArrayDef<Box<ObjectFieldDef>>,
     ObjectFieldDef::Array
 );
-impl_prop_getter!(get_object_prop, ObjectDef, ObjectFieldDef::Object);
-impl_prop_getter!(get_blob_prop, BlobDef, ObjectFieldDef::Blob);
-impl_prop_getter!(get_unknown_prop, UnknownDef, ObjectFieldDef::Unknown);
+impl_prop_get_val!(
+    get_object_prop,
+    validate_object_prop,
+    ObjectDef,
+    ObjectFieldDef::Object
+);
+impl_prop_get_val!(
+    get_blob_prop,
+    validate_blob_prop,
+    BlobDef,
+    ObjectFieldDef::Blob
+);
+impl_prop_get_val!(
+    get_unknown_prop,
+    validate_unknown_prop,
+    UnknownDef,
+    ObjectFieldDef::Unknown
+);
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -477,31 +548,27 @@ pub struct StringDef {
     pub r#const: Option<String>,
 }
 
-impl<S> Validate<StringDef> for S
-where
-    S: AsRef<str>,
-{
+impl Validate<StringDef> for &str {
     fn validate(&self, def: &StringDef, errs: &mut Vec<Error>) {
-        let s = self.as_ref();
         if let Some(min_length) = def.min_length {
-            if s.len() < min_length as usize {
+            if self.len() < min_length as usize {
                 errs.push(Error::StrLenOutOfBounds(
-                    s.len(),
+                    self.len(),
                     def.min_length,
                     def.max_length,
                 ));
             }
         }
         if let Some(max_length) = def.max_length {
-            if s.len() > max_length as usize {
+            if self.len() > max_length as usize {
                 errs.push(Error::StrLenOutOfBounds(
-                    s.len(),
+                    self.len(),
                     def.min_length,
                     def.max_length,
                 ));
             }
         }
-        let num_graphemes = s.graphemes(true).count() as u32;
+        let num_graphemes = self.graphemes(true).count() as u32;
         if let Some(min_graphemes) = def.min_graphemes {
             if num_graphemes < min_graphemes {
                 errs.push(Error::NumGraphemeshOutOfBounds(
@@ -521,22 +588,34 @@ where
             }
         }
         if let Some(r#enum) = &def.r#enum {
-            if !r#enum.iter().any(|enum_str| enum_str == s) {
+            if !r#enum.iter().any(|enum_str| enum_str == self) {
                 errs.push(Error::NotInEnumeration);
             }
         }
         if let Some(string_const) = &def.r#const {
-            if string_const != s {
+            if string_const != self {
                 errs.push(Error::ConstMismatch {
                     expected: string_const.to_string(),
-                    actual: s.to_string(),
+                    actual: self.to_string(),
                 })
             }
         }
 
         if let Some(format) = &def.format {
-            s.validate(format, errs);
+            self.validate(format, errs);
         }
+    }
+}
+
+impl Validate<StringDef> for String {
+    fn validate(&self, def: &StringDef, errs: &mut Vec<Error>) {
+        self.as_str().validate(def, errs);
+    }
+}
+
+impl Validate<StringDef> for atrium_api::types::string::Datetime {
+    fn validate(&self, def: &StringDef, errs: &mut Vec<Error>) {
+        self.as_str().validate(def, errs)
     }
 }
 
@@ -637,7 +716,7 @@ pub struct BlobDef {
     #[allow(dead_code)]
     pub description: Option<String>,
     pub accept: Option<Vec<String>>,
-    pub max_size: Option<u32>,
+    pub max_size: Option<usize>,
 }
 
 fn is_accepted_mime_type(mime_type: &String, accepted_mime_types: &Vec<String>) -> bool {
@@ -660,6 +739,42 @@ fn is_accepted_mime_type(mime_type: &String, accepted_mime_types: &Vec<String>) 
         }
     }
     false
+}
+
+impl Validate<BlobDef> for atrium_api::types::Blob {
+    fn validate(&self, def: &BlobDef, errs: &mut Vec<Error>) {
+        if let Some(accept) = &def.accept {
+            if !accept.contains(&self.mime_type) {
+                errs.push(Error::InvalidMimeType(self.mime_type.clone()));
+            }
+        }
+        if let Some(max_size) = def.max_size {
+            if self.size > max_size {
+                errs.push(Error::SizeOutOfBounds(
+                    self.size as u64,
+                    None,
+                    Some(max_size as u64),
+                ))
+            }
+        }
+    }
+}
+
+impl Validate<BlobDef> for atrium_api::types::TypedBlobRef {
+    fn validate(&self, def: &BlobDef, errs: &mut Vec<Error>) {
+        match self {
+            atrium_api::types::TypedBlobRef::Blob(blob) => blob.validate(def, errs),
+        }
+    }
+}
+
+impl Validate<BlobDef> for atrium_api::types::BlobRef {
+    fn validate(&self, def: &BlobDef, errs: &mut Vec<Error>) {
+        match self {
+            atrium_api::types::BlobRef::Typed(typed) => typed.validate(def, errs),
+            _ => errs.push(Error::MissingField("$type".to_owned())),
+        }
+    }
 }
 
 #[cfg(feature = "json")]
@@ -709,7 +824,7 @@ impl Validate<BlobDef> for serde_json::Map<String, serde_json::Value> {
                                         errs.push(Error::SizeOutOfBounds(
                                             size,
                                             Some(0),
-                                            Some(max_size),
+                                            Some(max_size as u64),
                                         ))
                                     }
                                 }

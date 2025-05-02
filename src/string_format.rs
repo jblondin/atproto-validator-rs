@@ -346,6 +346,41 @@ pub enum NsidError {
     InvalidName,
 }
 
+pub fn validate_generic_nsid_segment(segment: &str) -> Result<(), NsidError> {
+    if segment.is_empty() {
+        return Err(NsidError::EmptyPart);
+    }
+    if segment.len() > 63 {
+        return Err(NsidError::PartTooLong);
+    }
+    if segment.starts_with("-") || segment.ends_with("-") {
+        return Err(NsidError::InvalidHyphen);
+    }
+    Ok(())
+}
+
+pub fn validate_nsid_auth_segment(segment: &str, first: bool) -> Result<(), NsidError> {
+    validate_generic_nsid_segment(segment)?;
+    if first
+        && !segment
+            .chars()
+            .next()
+            .expect("non-empty checked")
+            .is_ascii_digit()
+    {
+        return Err(NsidError::InvalidInitialDigit);
+    }
+    Ok(())
+}
+
+pub fn validate_nsid_name_segment(segment: &str) -> Result<(), NsidError> {
+    validate_generic_nsid_segment(segment)?;
+    if !segment.chars().all(|c| c.is_ascii_alphabetic()) {
+        return Err(NsidError::InvalidName);
+    }
+    Ok(())
+}
+
 pub fn validate_nsid(s: impl AsRef<str>) -> Result<(), NsidError> {
     let s = s.as_ref();
     if s.len() > 317 {
@@ -362,20 +397,12 @@ pub fn validate_nsid(s: impl AsRef<str>) -> Result<(), NsidError> {
         return Err(NsidError::NotEnoughParts);
     }
     for (index, part) in parts.enumerate() {
-        if part.is_empty() {
-            return Err(NsidError::EmptyPart);
-        }
-        if part.len() > 63 {
-            return Err(NsidError::PartTooLong);
-        }
-        if part.starts_with("-") || part.ends_with("-") {
-            return Err(NsidError::InvalidHyphen);
-        }
-        if index == 0 && !part.chars().next().expect("size checked").is_ascii_digit() {
-            return Err(NsidError::InvalidInitialDigit);
-        }
-        if index == parts_count - 1 && !part.chars().all(|c| c.is_ascii_alphabetic()) {
-            return Err(NsidError::InvalidName);
+        if index == parts_count - 1 {
+            // last segment (name)
+            validate_nsid_name_segment(part)?;
+        } else {
+            // authority part
+            validate_nsid_auth_segment(part, index == 0)?;
         }
     }
 
