@@ -83,9 +83,9 @@ pub trait Validate<T> {
 
 /// Trait to provide top-level validation of an ATProto object against a lexicon document. This
 /// typically doesn't need to be implemented, as there is a blanket implementation for structs that
-/// implenent `Validate<DocumentType>` (which should be implemented instead).
+/// implement `Validate<DocumentType>` (which should be implemented instead).
 pub trait ValidateObject {
-    ///
+    /// Validates the object against a lexicon schema document.
     fn validate_object(&self, doc: &Document) -> Result<(), Vec<Error>>;
 }
 
