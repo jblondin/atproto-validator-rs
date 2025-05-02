@@ -99,10 +99,15 @@ where
         for (def_key, primary_def) in doc.defs.iter() {
             if def_key == "main" {
                 self.validate(primary_def, &mut errs);
+                if errs.is_empty() {
+                    return Ok(());
+                } else {
+                    return Err(errs);
+                }
             }
         }
         errs.push(Error::MissingMain);
-        if errs.is_empty() { Ok(()) } else { Err(errs) }
+        Err(errs)
     }
 }
 
