@@ -5,14 +5,14 @@ use lexicons::record_document_json;
 
 #[test]
 fn deserialize_lexicon_docs() {
-    if let Err(e) =
-        serde_json::from_value::<Document>(record_document_json("xyz.statusphere.status"))
-    {
+    if let Err(e) = serde_json::from_value::<Document>(record_document_json(
+        &"xyz.statusphere.status".parse().expect("bad nsid"),
+    )) {
         panic!("deserializtion failed: {e}");
     }
-    if let Err(e) =
-        serde_json::from_value::<Document>(record_document_json("app.bsky.actor.profile"))
-    {
+    if let Err(e) = serde_json::from_value::<Document>(record_document_json(
+        &"app.bsky.actor.profile".parse().expect("bad nsid"),
+    )) {
         panic!("deserializtion failed: {e}");
     }
     //TODO: include when query handling is implemented

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Index};
 
 use atrium_api::types::string::Nsid;
 
@@ -24,6 +24,8 @@ pub struct Document {
 pub enum Error {
     #[error("expected object")]
     ExpectedObject,
+    #[error("missing nsid in context: {0}")]
+    MissingNsid(String),
     #[error("missing field '{0}'")]
     MissingField(String),
     #[error("invalid error type for field '{0}'")]
@@ -66,6 +68,32 @@ pub enum Error {
     Custom(Box<dyn std::error::Error + Send + Sync>),
 }
 
+pub struct Context {
+    documents: HashMap<Nsid, Document>,
+}
+
+impl Context {
+    pub fn from_documents(docs: impl IntoIterator<Item = Document>) -> Context {
+        Context {
+            documents: HashMap::from_iter(docs.into_iter().map(|doc| (doc.id.clone(), doc))),
+        }
+    }
+}
+
+impl Context {
+    fn get(&self, index: &Nsid) -> Option<&Document> {
+        self.documents.get(index)
+    }
+}
+
+impl Index<&Nsid> for Context {
+    type Output = Document;
+
+    fn index(&self, index: &Nsid) -> &Self::Output {
+        &self.documents[index]
+    }
+}
+
 /// Trait that providees validation against an ATProto lexicon document or subcomponent.
 ///
 /// This trait can be implemented for structs you want to validate against a lexicon document.
@@ -78,27 +106,31 @@ pub trait Validate<T> {
     ///
     /// See also `[ValidateObject::validate_object]`, which is the normal entry point for calling
     /// for validation of an obect against a given lexicon document.
-    fn validate(&self, def: &T, errs: &mut Vec<Error>);
+    fn validate(&self, def: &T, ctxt: &Context, errs: &mut Vec<Error>);
 }
 
 /// Trait to provide top-level validation of an ATProto object against a lexicon document. This
 /// typically doesn't need to be implemented, as there is a blanket implementation for structs that
 /// implement `Validate<DocumentType>` (which should be implemented instead).
 pub trait ValidateObject {
-    /// Validates the object against a lexicon schema document.
-    fn validate_object(&self, doc: &Document) -> Result<(), Vec<Error>>;
+    /// Validates the object against the lexicon schema document stored in `context` with key
+    /// `nsid`.
+    fn validate_object(&self, ctxt: &Context, nsid: &Nsid) -> Result<(), Vec<Error>>;
 }
 
 impl<T> ValidateObject for T
 where
     T: for<'a> Validate<DocumentType<'a>> + Validate<PrimaryDef>,
 {
-    fn validate_object(&self, doc: &Document) -> Result<(), Vec<Error>> {
+    fn validate_object(&self, ctxt: &Context, nsid: &Nsid) -> Result<(), Vec<Error>> {
+        let doc = ctxt
+            .get(nsid)
+            .ok_or_else(|| vec![Error::MissingNsid(nsid.as_str().to_owned())])?;
         let mut errs = vec![];
-        self.validate(&DocumentType(doc.id.as_str()), &mut errs);
+        self.validate(&DocumentType(doc.id.as_str()), ctxt, &mut errs);
         for (def_key, primary_def) in doc.defs.iter() {
             if def_key == "main" {
-                self.validate(primary_def, &mut errs);
+                self.validate(primary_def, ctxt, &mut errs);
                 if errs.is_empty() {
                     return Ok(());
                 } else {
@@ -127,7 +159,7 @@ impl<'a> DocumentType<'a> {
 
 #[cfg(feature = "json")]
 impl<'a> Validate<DocumentType<'a>> for serde_json::Value {
-    fn validate(&self, doc_type: &DocumentType<'a>, errs: &mut Vec<Error>) {
+    fn validate(&self, doc_type: &DocumentType<'a>, _ctxt: &Context, errs: &mut Vec<Error>) {
         let serde_json::Value::Object(map) = self else {
             errs.push(Error::ExpectedObject);
             return;
@@ -150,7 +182,7 @@ impl<'a> Validate<DocumentType<'a>> for serde_json::Value {
 
 #[cfg(feature = "json")]
 impl Validate<Document> for serde_json::Value {
-    fn validate(&self, doc: &Document, errs: &mut Vec<Error>) {
+    fn validate(&self, doc: &Document, _ctxt: &Context, errs: &mut Vec<Error>) {
         let serde_json::Value::Object(map) = self else {
             errs.push(Error::ExpectedObject);
             return;
@@ -182,9 +214,9 @@ impl<T> Validate<PrimaryDef> for T
 where
     T: Validate<RecordDef>,
 {
-    fn validate(&self, def: &PrimaryDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &PrimaryDef, ctxt: &Context, errs: &mut Vec<Error>) {
         match def {
-            PrimaryDef::Record(record) => self.validate(record, errs),
+            PrimaryDef::Record(record) => self.validate(record, ctxt, errs),
         }
     }
 }
@@ -203,8 +235,8 @@ impl<T> Validate<RecordDef> for T
 where
     T: Validate<ObjectDef>,
 {
-    fn validate(&self, def: &RecordDef, errs: &mut Vec<Error>) {
-        self.validate(&def.record, errs)
+    fn validate(&self, def: &RecordDef, ctxt: &Context, errs: &mut Vec<Error>) {
+        self.validate(&def.record, ctxt, errs)
     }
 }
 
@@ -239,7 +271,7 @@ fn find_invalid_nulls(null_props: Vec<&String>, mut nullable: Vec<&String>, errs
 
 #[cfg(feature = "json")]
 impl Validate<ObjectDef> for serde_json::Map<String, serde_json::Value> {
-    fn validate(&self, def: &ObjectDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &ObjectDef, ctxt: &Context, errs: &mut Vec<Error>) {
         if let Some(required) = &def.required {
             for req_prop in required {
                 if self.get(req_prop).is_none() {
@@ -268,7 +300,7 @@ impl Validate<ObjectDef> for serde_json::Map<String, serde_json::Value> {
         for (field_name, field) in self {
             match def.properties.get(field_name) {
                 Some(object_field) => {
-                    field.validate(object_field, errs);
+                    field.validate(object_field, ctxt, errs);
                 }
                 None if field_name == "$type" => {
                     // ignore, $type is allowed in some objects
@@ -283,13 +315,13 @@ impl Validate<ObjectDef> for serde_json::Map<String, serde_json::Value> {
 
 #[cfg(feature = "json")]
 impl Validate<ObjectDef> for serde_json::Value {
-    fn validate(&self, def: &ObjectDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &ObjectDef, ctxt: &Context, errs: &mut Vec<Error>) {
         let serde_json::Value::Object(obj) = self else {
             errs.push(Error::ExpectedObject);
             return;
         };
 
-        obj.validate(def, errs)
+        obj.validate(def, ctxt, errs)
     }
 }
 
@@ -302,7 +334,7 @@ macro_rules! impl_prop_get_val {
             pub fn $get_fn_name(
                 &self,
                 name: impl AsRef<str>,
-                errs: &mut Vec<Error>,
+                errs: &mut Vec<$crate::Error>,
             ) -> Option<&$def_type> {
                 let name = name.as_ref();
                 match self.properties.get(name) {
@@ -322,7 +354,8 @@ macro_rules! impl_prop_get_val {
                 &self,
                 name: impl AsRef<str>,
                 object: impl Into<Option<&'a T>>,
-                errs: &mut Vec<Error>,
+                ctxt: &$crate::Context,
+                errs: &mut Vec<$crate::Error>,
             ) where
                 T: 'a + Validate<$def_type>,
             {
@@ -330,7 +363,7 @@ macro_rules! impl_prop_get_val {
                 if let Some(field_def) = self.$get_fn_name(name, errs) {
                     match object.into() {
                         Some(object) => {
-                            object.validate(field_def, errs);
+                            object.validate(field_def, ctxt, errs);
                         }
                         None if self.requires(name) => {
                             errs.push($crate::Error::MissingField(name.to_owned()));
@@ -417,33 +450,33 @@ pub enum ObjectFieldDef {
 
 #[cfg(feature = "json")]
 impl Validate<ObjectFieldDef> for serde_json::Value {
-    fn validate(&self, def: &ObjectFieldDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &ObjectFieldDef, ctxt: &Context, errs: &mut Vec<Error>) {
         match (self, def) {
             (serde_json::Value::Null, ObjectFieldDef::Null) => {}
             (serde_json::Value::Bool(b), ObjectFieldDef::Boolean(bool_def)) => {
-                b.validate(bool_def, errs)
+                b.validate(bool_def, ctxt, errs)
             }
             (serde_json::Value::Number(number), ObjectFieldDef::Integer(integer_def)) => {
-                number.validate(integer_def, errs)
+                number.validate(integer_def, ctxt, errs)
             }
             (serde_json::Value::String(s), ObjectFieldDef::String(string_def)) => {
-                s.validate(string_def, errs)
+                s.validate(string_def, ctxt, errs)
             }
             (serde_json::Value::String(_), ObjectFieldDef::Ref(_)) => {}
             (serde_json::Value::Array(values), ObjectFieldDef::Array(array_def)) => {
-                values.validate(array_def, errs)
+                values.validate(array_def, ctxt, errs)
             }
             (serde_json::Value::Object(map), ObjectFieldDef::Object(object_def)) => {
-                map.validate(object_def, errs)
+                map.validate(object_def, ctxt, errs)
             }
             (serde_json::Value::Object(map), ObjectFieldDef::Blob(blob_def)) => {
-                map.validate(blob_def, errs)
+                map.validate(blob_def, ctxt, errs)
             }
             (serde_json::Value::Object(map), ObjectFieldDef::Bytes(bytes_def)) => {
-                map.validate(bytes_def, errs)
+                map.validate(bytes_def, ctxt, errs)
             }
             (serde_json::Value::Object(map), ObjectFieldDef::CidLink(cid_link_def)) => {
-                map.validate(cid_link_def, errs)
+                map.validate(cid_link_def, ctxt, errs)
             }
             (serde_json::Value::Object(_), ObjectFieldDef::Unknown(_)) => {}
             (serde_json::Value::Object(_), ObjectFieldDef::Union(_)) => {}
@@ -465,7 +498,7 @@ pub struct BooleanDef {
 }
 
 impl Validate<BooleanDef> for bool {
-    fn validate(&self, def: &BooleanDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &BooleanDef, _ctxt: &Context, errs: &mut Vec<Error>) {
         if let Some(bool_const) = def.r#const {
             if bool_const != *self {
                 errs.push(Error::ConstMismatch {
@@ -491,7 +524,7 @@ pub struct IntegerDef {
 }
 
 impl Validate<IntegerDef> for i64 {
-    fn validate(&self, def: &IntegerDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &IntegerDef, _ctxt: &Context, errs: &mut Vec<Error>) {
         if def.minimum.filter(|min| self < min).is_some()
             || def.maximum.filter(|max| self < max).is_some()
         {
@@ -515,12 +548,12 @@ impl Validate<IntegerDef> for i64 {
 
 #[cfg(feature = "json")]
 impl Validate<IntegerDef> for serde_json::Number {
-    fn validate(&self, def: &IntegerDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &IntegerDef, ctxt: &Context, errs: &mut Vec<Error>) {
         if self.is_f64() {
             errs.push(Error::InvalidFloat);
         }
         match self.as_i64() {
-            Some(num) => num.validate(def, errs),
+            Some(num) => num.validate(def, ctxt, errs),
             None => {
                 // this should only happen for values represented as u64s that are outside of the
                 // i64 value range
@@ -549,7 +582,7 @@ pub struct StringDef {
 }
 
 impl Validate<StringDef> for &str {
-    fn validate(&self, def: &StringDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &StringDef, ctxt: &Context, errs: &mut Vec<Error>) {
         if let Some(min_length) = def.min_length {
             if self.len() < min_length as usize {
                 errs.push(Error::StrLenOutOfBounds(
@@ -602,20 +635,20 @@ impl Validate<StringDef> for &str {
         }
 
         if let Some(format) = &def.format {
-            self.validate(format, errs);
+            self.validate(format, ctxt, errs);
         }
     }
 }
 
 impl Validate<StringDef> for String {
-    fn validate(&self, def: &StringDef, errs: &mut Vec<Error>) {
-        self.as_str().validate(def, errs);
+    fn validate(&self, def: &StringDef, ctxt: &Context, errs: &mut Vec<Error>) {
+        self.as_str().validate(def, ctxt, errs);
     }
 }
 
 impl Validate<StringDef> for atrium_api::types::string::Datetime {
-    fn validate(&self, def: &StringDef, errs: &mut Vec<Error>) {
-        self.as_str().validate(def, errs)
+    fn validate(&self, def: &StringDef, ctxt: &Context, errs: &mut Vec<Error>) {
+        self.as_str().validate(def, ctxt, errs)
     }
 }
 
@@ -630,7 +663,7 @@ pub struct BytesDef {
 
 #[cfg(feature = "json")]
 impl Validate<BytesDef> for serde_json::Map<String, serde_json::Value> {
-    fn validate(&self, def: &BytesDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &BytesDef, _ctxt: &Context, errs: &mut Vec<Error>) {
         match self.get("$bytes") {
             Some(bytes_value) => match bytes_value {
                 serde_json::Value::String(bytes_value) => {
@@ -671,7 +704,7 @@ pub struct CidLinkDef {
 
 #[cfg(feature = "json")]
 impl Validate<CidLinkDef> for serde_json::Map<String, serde_json::Value> {
-    fn validate(&self, _def: &CidLinkDef, errs: &mut Vec<Error>) {
+    fn validate(&self, _def: &CidLinkDef, _ctxt: &Context, errs: &mut Vec<Error>) {
         match self.get("$link") {
             Some(_bytes_value) => {}
             None => errs.push(Error::MissingField("$bytes".to_owned())),
@@ -694,7 +727,7 @@ impl<Fields> Validate<ArrayDef<Box<Fields>>> for Vec<serde_json::Value>
 where
     serde_json::Value: Validate<Fields>,
 {
-    fn validate(&self, def: &ArrayDef<Box<Fields>>, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &ArrayDef<Box<Fields>>, ctxt: &Context, errs: &mut Vec<Error>) {
         if def.min_length.filter(|&min| self.len() < min).is_some()
             || def.max_length.filter(|&max| self.len() > max).is_some()
         {
@@ -705,7 +738,7 @@ where
             ));
         }
         for value in self {
-            value.validate(&def.items, errs);
+            value.validate(&def.items, ctxt, errs);
         }
     }
 }
@@ -742,7 +775,7 @@ fn is_accepted_mime_type(mime_type: &String, accepted_mime_types: &Vec<String>) 
 }
 
 impl Validate<BlobDef> for atrium_api::types::Blob {
-    fn validate(&self, def: &BlobDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &BlobDef, _ctxt: &Context, errs: &mut Vec<Error>) {
         if let Some(accept) = &def.accept {
             if !accept.contains(&self.mime_type) {
                 errs.push(Error::InvalidMimeType(self.mime_type.clone()));
@@ -761,17 +794,17 @@ impl Validate<BlobDef> for atrium_api::types::Blob {
 }
 
 impl Validate<BlobDef> for atrium_api::types::TypedBlobRef {
-    fn validate(&self, def: &BlobDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &BlobDef, ctxt: &Context, errs: &mut Vec<Error>) {
         match self {
-            atrium_api::types::TypedBlobRef::Blob(blob) => blob.validate(def, errs),
+            atrium_api::types::TypedBlobRef::Blob(blob) => blob.validate(def, ctxt, errs),
         }
     }
 }
 
 impl Validate<BlobDef> for atrium_api::types::BlobRef {
-    fn validate(&self, def: &BlobDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &BlobDef, ctxt: &Context, errs: &mut Vec<Error>) {
         match self {
-            atrium_api::types::BlobRef::Typed(typed) => typed.validate(def, errs),
+            atrium_api::types::BlobRef::Typed(typed) => typed.validate(def, ctxt, errs),
             _ => errs.push(Error::MissingField("$type".to_owned())),
         }
     }
@@ -779,7 +812,7 @@ impl Validate<BlobDef> for atrium_api::types::BlobRef {
 
 #[cfg(feature = "json")]
 impl Validate<BlobDef> for serde_json::Map<String, serde_json::Value> {
-    fn validate(&self, def: &BlobDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &BlobDef, _ctxt: &Context, errs: &mut Vec<Error>) {
         match self.get("$type") {
             Some(type_value) => match type_value {
                 serde_json::Value::String(type_value) => {
@@ -848,16 +881,17 @@ impl Validate<BlobDef> for serde_json::Map<String, serde_json::Value> {
 // TODO: implement ref and union types (which will require multi-document types / validation)
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct RefDef {
+    #[allow(dead_code)]
     pub description: Option<String>,
     pub r#ref: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct UnionDef {
+    #[allow(dead_code)]
+    pub description: Option<String>,
     pub refs: Vec<String>,
     #[serde(default)] // defaults to false
     pub closed: bool,

@@ -3,7 +3,9 @@ An example demonstrating validation of an arbitrary object (instead of the `serd
 validation implemented as part of the "json" feature).
  */
 
-use atproto_validator::{Document, DocumentType, Error, ObjectDef, Validate, ValidateObject};
+use atproto_validator::{
+    Context, Document, DocumentType, Error, ObjectDef, Validate, ValidateObject,
+};
 use atrium_api::types::string::Datetime;
 
 pub mod lexicons;
@@ -21,7 +23,7 @@ pub struct RecordData {
 }
 
 impl<'a> Validate<DocumentType<'a>> for RecordData {
-    fn validate(&self, doc_type: &DocumentType<'a>, errs: &mut Vec<Error>) {
+    fn validate(&self, doc_type: &DocumentType<'a>, _ctxt: &Context, errs: &mut Vec<Error>) {
         if self.r#type != doc_type.as_str() {
             errs.push(Error::TypeMismatch {
                 expected: doc_type.as_str().to_owned(),
@@ -32,38 +34,39 @@ impl<'a> Validate<DocumentType<'a>> for RecordData {
 }
 
 impl Validate<ObjectDef> for RecordData {
-    fn validate(&self, def: &ObjectDef, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &ObjectDef, ctxt: &Context, errs: &mut Vec<Error>) {
         if let Some(string_def) = def.get_string_prop("createdAt", errs) {
-            self.created_at.as_str().validate(string_def, errs);
+            self.created_at.as_str().validate(string_def, ctxt, errs);
         }
         if let Some(string_def) = def.get_string_prop("status", errs) {
-            self.status.as_str().validate(string_def, errs);
+            self.status.as_str().validate(string_def, ctxt, errs);
         }
     }
 }
 
 #[test]
 pub fn validate_non_json_object() {
-    let doc =
-        match serde_json::from_value::<Document>(record_document_json("xyz.statusphere.status")) {
-            Ok(doc) => doc,
-            Err(e) => panic!("lexicon deserializtion failed: {e}"),
-        };
+    let nsid = "xyz.statusphere.status".parse().expect("bad nsid");
+    let doc = match serde_json::from_value::<Document>(record_document_json(&nsid)) {
+        Ok(doc) => doc,
+        Err(e) => panic!("lexicon deserializtion failed: {e}"),
+    };
+    let ctxt = Context::from_documents([doc]);
 
     let object = RecordData {
-        r#type: "xyz.statusphere.status".to_owned(),
+        r#type: nsid.as_str().to_owned(),
         created_at: Datetime::now(),
         status: "😱".to_owned(),
     };
-    let validation_results = object.validate_object(&doc);
+    let validation_results = object.validate_object(&ctxt, &nsid);
     assert!(validation_results.is_ok());
 
     let object = RecordData {
-        r#type: "xyz.statusphere.status".to_owned(),
+        r#type: nsid.as_str().to_owned(),
         created_at: Datetime::now(),
         status: "😱😱".to_owned(),
     };
-    let validation_results = object.validate_object(&doc);
+    let validation_results = object.validate_object(&ctxt, &nsid);
     assert!(validation_results.is_err());
     let error = validation_results.unwrap_err().pop().unwrap();
     let Error::NumGraphemeshOutOfBounds(2, None, Some(1)) = error else {

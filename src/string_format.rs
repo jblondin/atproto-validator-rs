@@ -5,7 +5,7 @@ use chrono::DateTime;
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::{Error, Validate};
+use crate::{Context, Error, Validate};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -27,7 +27,7 @@ impl<S> Validate<StringFormat> for S
 where
     S: AsRef<str>,
 {
-    fn validate(&self, format: &StringFormat, errs: &mut Vec<Error>) {
+    fn validate(&self, format: &StringFormat, _ctxt: &Context, errs: &mut Vec<Error>) {
         let s = self.as_ref();
         match format {
             StringFormat::AtIdentifier => {
