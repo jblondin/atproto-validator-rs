@@ -9,17 +9,6 @@ use unicode_segmentation::UnicodeSegmentation;
 pub mod string_format;
 use string_format::{FormatError, StringFormat};
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Document {
-    #[allow(dead_code)]
-    pub lexicon: u32,
-    pub id: Nsid,
-    #[allow(dead_code)]
-    pub description: Option<String>,
-    pub defs: HashMap<String, TopLevelDef>,
-}
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("expected object")]
@@ -28,6 +17,8 @@ pub enum Error {
     MissingNsid(String),
     #[error("invalid reference: {0}")]
     InvalidRef(String),
+    #[error("non-canonical ref: {0}")]
+    NonCanonicalRef(String),
     #[error("reference not found in context: {0}")]
     MissingRef(String),
     #[error("nsid parsing error: {0}")]
@@ -76,32 +67,6 @@ pub enum Error {
     Custom(Box<dyn std::error::Error + Send + Sync>),
 }
 
-pub struct Context {
-    documents: HashMap<Nsid, Document>,
-}
-
-impl Context {
-    pub fn from_documents(docs: impl IntoIterator<Item = Document>) -> Context {
-        Context {
-            documents: HashMap::from_iter(docs.into_iter().map(|doc| (doc.id.clone(), doc))),
-        }
-    }
-}
-
-impl Context {
-    fn get(&self, index: &Nsid) -> Option<&Document> {
-        self.documents.get(index)
-    }
-}
-
-impl Index<&Nsid> for Context {
-    type Output = Document;
-
-    fn index(&self, index: &Nsid) -> &Self::Output {
-        &self.documents[index]
-    }
-}
-
 /// Trait that providees validation against an ATProto lexicon document or subcomponent.
 ///
 /// This trait can be implemented for structs you want to validate against a lexicon document.
@@ -148,6 +113,55 @@ where
         }
         errs.push(Error::MissingMain);
         Err(errs)
+    }
+}
+
+pub trait Canonicalize {
+    fn canonicalize(&mut self, nsid: &Nsid);
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Document {
+    #[allow(dead_code)]
+    pub lexicon: u32,
+    pub id: Nsid,
+    #[allow(dead_code)]
+    pub description: Option<String>,
+    pub defs: HashMap<String, TopLevelDef>,
+}
+
+impl Document {
+    pub fn canonicalize(&mut self) {
+        for def in self.defs.values_mut() {
+            def.canonicalize(&self.id);
+        }
+    }
+}
+
+pub struct Context {
+    documents: HashMap<Nsid, Document>,
+}
+
+impl Context {
+    pub fn from_documents(docs: impl IntoIterator<Item = Document>) -> Context {
+        Context {
+            documents: HashMap::from_iter(docs.into_iter().map(|doc| (doc.id.clone(), doc))),
+        }
+    }
+}
+
+impl Context {
+    fn get(&self, index: &Nsid) -> Option<&Document> {
+        self.documents.get(index)
+    }
+}
+
+impl Index<&Nsid> for Context {
+    type Output = Document;
+
+    fn index(&self, index: &Nsid) -> &Self::Output {
+        &self.documents[index]
     }
 }
 
@@ -221,7 +235,7 @@ pub enum TopLevelDef {
     String(StringDef),
     Bytes(BytesDef),
     CidLink(CidLinkDef),
-    Array(ArrayDef<Box<Self>>),
+    Array(ArrayDef<Self>),
     Object(ObjectDef),
     Blob(BlobDef),
 }
@@ -238,6 +252,17 @@ impl TopLevelDef {
             TopLevelDef::Array(_) => "array",
             TopLevelDef::Object(_) => "object",
             TopLevelDef::Blob(_) => "blob",
+        }
+    }
+}
+
+impl Canonicalize for TopLevelDef {
+    fn canonicalize(&mut self, nsid: &Nsid) {
+        match self {
+            TopLevelDef::Record(record_def) => record_def.canonicalize(nsid),
+            TopLevelDef::Array(array_def) => array_def.canonicalize(nsid),
+            TopLevelDef::Object(object_def) => object_def.canonicalize(nsid),
+            _ => {}
         }
     }
 }
@@ -278,6 +303,12 @@ where
     }
 }
 
+impl Canonicalize for RecordDef {
+    fn canonicalize(&mut self, nsid: &Nsid) {
+        self.record.canonicalize(nsid);
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectDef {
@@ -294,6 +325,14 @@ impl ObjectDef {
             .as_ref()
             .map(|keys| keys.iter().any(|reqd| key.as_ref() == reqd))
             .unwrap_or(false)
+    }
+}
+
+impl Canonicalize for ObjectDef {
+    fn canonicalize(&mut self, nsid: &Nsid) {
+        for object_field_def in self.properties.values_mut() {
+            object_field_def.canonicalize(nsid);
+        }
     }
 }
 
@@ -447,7 +486,7 @@ impl_prop_get_val!(
 impl_prop_get_val!(
     get_array_prop,
     validate_array_prop,
-    ArrayDef<Box<ObjectFieldDef>>,
+    ArrayDef<ObjectFieldDef>,
     ObjectFieldDef::Array
 );
 impl_prop_get_val!(
@@ -478,12 +517,24 @@ pub enum ObjectFieldDef {
     String(StringDef),
     Bytes(BytesDef),
     CidLink(CidLinkDef),
-    Array(ArrayDef<Box<Self>>),
+    Array(ArrayDef<Self>),
     Object(ObjectDef),
     Blob(BlobDef),
     Ref(RefDef),
     Union(UnionDef),
     Unknown(UnknownDef),
+}
+
+impl Canonicalize for ObjectFieldDef {
+    fn canonicalize(&mut self, nsid: &Nsid) {
+        match self {
+            ObjectFieldDef::Array(array_def) => array_def.canonicalize(nsid),
+            ObjectFieldDef::Object(object_def) => object_def.canonicalize(nsid),
+            ObjectFieldDef::Ref(ref_def) => ref_def.canonicalize(nsid),
+            ObjectFieldDef::Union(union_def) => union_def.canonicalize(nsid),
+            _ => {}
+        }
+    }
 }
 
 #[cfg(feature = "json")]
@@ -786,17 +837,26 @@ impl Validate<CidLinkDef> for serde_json::Value {
 pub struct ArrayDef<Fields> {
     #[allow(dead_code)]
     pub description: Option<String>,
-    pub items: Fields,
+    pub items: Box<Fields>,
     pub min_length: Option<usize>,
     pub max_length: Option<usize>,
 }
 
+impl<Fields> Canonicalize for ArrayDef<Fields>
+where
+    Fields: Canonicalize,
+{
+    fn canonicalize(&mut self, nsid: &Nsid) {
+        self.items.canonicalize(nsid);
+    }
+}
+
 #[cfg(feature = "json")]
-impl<Fields> Validate<ArrayDef<Box<Fields>>> for Vec<serde_json::Value>
+impl<Fields> Validate<ArrayDef<Fields>> for Vec<serde_json::Value>
 where
     serde_json::Value: Validate<Fields>,
 {
-    fn validate(&self, def: &ArrayDef<Box<Fields>>, ctxt: &Context, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &ArrayDef<Fields>, ctxt: &Context, errs: &mut Vec<Error>) {
         if def.min_length.filter(|&min| self.len() < min).is_some()
             || def.max_length.filter(|&max| self.len() > max).is_some()
         {
@@ -813,11 +873,11 @@ where
 }
 
 #[cfg(feature = "json")]
-impl<Fields> Validate<ArrayDef<Box<Fields>>> for serde_json::Value
+impl<Fields> Validate<ArrayDef<Fields>> for serde_json::Value
 where
     serde_json::Value: Validate<Fields>,
 {
-    fn validate(&self, def: &ArrayDef<Box<Fields>>, ctxt: &Context, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &ArrayDef<Fields>, ctxt: &Context, errs: &mut Vec<Error>) {
         match self {
             serde_json::Value::Array(arr) => arr.validate(def, ctxt, errs),
             _ => errs.push(Error::FieldTypeMismatch),
@@ -981,7 +1041,7 @@ pub struct RefDef {
 
 #[derive(Debug)]
 pub struct Ref {
-    nsid: Nsid,
+    nsid: Option<Nsid>,
     fragment: Option<String>,
 }
 
@@ -991,6 +1051,9 @@ impl Ref {
             Some(fragment) => fragment.as_str(),
             None => "main",
         }
+    }
+    pub fn is_canonical(&self) -> bool {
+        self.nsid.is_some()
     }
 }
 
@@ -1006,7 +1069,11 @@ impl std::str::FromStr for Ref {
             return Err(Error::InvalidRef(s.to_owned()));
         }
         Ok(Ref {
-            nsid: nsid_part.parse().map_err(Error::NsidParse)?,
+            nsid: if nsid_part.is_empty() {
+                None
+            } else {
+                Some(nsid_part.parse().map_err(Error::NsidParse)?)
+            },
             fragment: fragment_part.map(|s| s.to_owned()),
         })
     }
@@ -1016,15 +1083,28 @@ fn deserialize_ref<'de, D>(deserializer: D) -> Result<Ref, D::Error>
 where
     D: de::Deserializer<'de>,
 {
-    let s: &str = de::Deserialize::deserialize(deserializer)?;
+    let s: String = de::Deserialize::deserialize(deserializer)?;
     s.parse().map_err(de::Error::custom)
 }
 
 impl std::fmt::Display for Ref {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let nsid = self
+            .nsid
+            .as_ref()
+            .map(|nsid| nsid.as_str())
+            .unwrap_or_default();
         match &self.fragment {
-            Some(fragment) => write!(f, "{}#{}", self.nsid.as_str(), fragment),
-            None => write!(f, "{}", self.nsid.as_str()),
+            Some(fragment) => write!(f, "{}#{}", nsid, fragment),
+            None => write!(f, "{}", nsid),
+        }
+    }
+}
+
+impl Canonicalize for RefDef {
+    fn canonicalize(&mut self, nsid: &Nsid) {
+        if self.r#ref.nsid.is_none() {
+            self.r#ref.nsid = Some(nsid.clone());
         }
     }
 }
@@ -1034,7 +1114,11 @@ where
     T: Validate<TopLevelDef>,
 {
     fn validate(&self, def: &RefDef, ctxt: &Context, errs: &mut Vec<Error>) {
-        let Some(doc) = ctxt.get(&def.r#ref.nsid) else {
+        let Some(nsid) = &def.r#ref.nsid else {
+            errs.push(Error::NonCanonicalRef(def.r#ref.to_string()));
+            return;
+        };
+        let Some(doc) = ctxt.get(nsid) else {
             errs.push(Error::MissingRef(def.r#ref.to_string()));
             return;
         };
@@ -1061,12 +1145,22 @@ fn deserialize_refs<'de, D>(deserializer: D) -> Result<Vec<Ref>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
-    let mut inputs = Vec::<&str>::deserialize(deserializer)?;
+    let mut inputs = Vec::<String>::deserialize(deserializer)?;
     let refs = inputs
         .drain(..)
         .map(|elem| Ok(elem.parse().map_err(de::Error::custom)?))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(refs)
+}
+
+impl Canonicalize for UnionDef {
+    fn canonicalize(&mut self, nsid: &Nsid) {
+        for r#ref in &mut self.refs {
+            if r#ref.nsid.is_none() {
+                r#ref.nsid = Some(nsid.clone());
+            }
+        }
+    }
 }
 
 impl<T> Validate<UnionDef> for T
@@ -1076,7 +1170,12 @@ where
     fn validate(&self, def: &UnionDef, ctxt: &Context, errs: &mut Vec<Error>) {
         let mut found = false;
         for r#ref in &def.refs {
-            let Some(doc) = ctxt.get(&r#ref.nsid) else {
+            let Some(nsid) = &r#ref.nsid else {
+                // hard error even when being permissive
+                errs.push(Error::NonCanonicalRef(r#ref.to_string()));
+                return;
+            };
+            let Some(doc) = ctxt.get(nsid) else {
                 continue;
             };
             let Some(tld) = doc.defs.get(r#ref.fragment()) else {
@@ -1114,7 +1213,7 @@ pub enum ParamsFieldDef {
     Boolean(BooleanDef),
     Integer(IntegerDef),
     String(StringDef),
-    Array(ArrayDef<Box<Self>>),
+    Array(ArrayDef<Self>),
     Unknown(UnknownDef),
 }
 
