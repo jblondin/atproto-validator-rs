@@ -36,7 +36,7 @@ pub enum Error {
     UnfoundRefInUnion,
     #[error("missing field '{0}'")]
     MissingField(String),
-    #[error("invalid error type for field '{0}'")]
+    #[error("invalid type for field '{0}'")]
     InvalidField(String),
     #[error("$type mismatch: expected {expected}, found {actual}")]
     TypeMismatch { expected: String, actual: String },
@@ -216,15 +216,45 @@ impl Validate<Document> for serde_json::Value {
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum TopLevelDef {
     Record(RecordDef),
+    Boolean(BooleanDef),
+    Integer(IntegerDef),
+    String(StringDef),
+    Bytes(BytesDef),
+    CidLink(CidLinkDef),
+    Array(ArrayDef<Box<Self>>),
+    Object(ObjectDef),
+    Blob(BlobDef),
 }
 
-impl<T> Validate<TopLevelDef> for T
-where
-    T: Validate<RecordDef>,
-{
+impl TopLevelDef {
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            TopLevelDef::Record(_) => "record",
+            TopLevelDef::Boolean(_) => "boolean",
+            TopLevelDef::Integer(_) => "integer",
+            TopLevelDef::String(_) => "string",
+            TopLevelDef::Bytes(_) => "bytes",
+            TopLevelDef::CidLink(_) => "cid_link",
+            TopLevelDef::Array(_) => "array",
+            TopLevelDef::Object(_) => "object",
+            TopLevelDef::Blob(_) => "blob",
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl Validate<TopLevelDef> for serde_json::Value {
     fn validate(&self, def: &TopLevelDef, ctxt: &Context, errs: &mut Vec<Error>) {
         match def {
             TopLevelDef::Record(record) => self.validate(record, ctxt, errs),
+            TopLevelDef::Boolean(boolean_def) => self.validate(boolean_def, ctxt, errs),
+            TopLevelDef::Integer(integer_def) => self.validate(integer_def, ctxt, errs),
+            TopLevelDef::String(string_def) => self.validate(string_def, ctxt, errs),
+            TopLevelDef::Bytes(bytes_def) => self.validate(bytes_def, ctxt, errs),
+            TopLevelDef::CidLink(cid_link_def) => self.validate(cid_link_def, ctxt, errs),
+            TopLevelDef::Array(array_def) => self.validate(array_def, ctxt, errs),
+            TopLevelDef::Object(object_def) => self.validate(object_def, ctxt, errs),
+            TopLevelDef::Blob(blob_def) => self.validate(blob_def, ctxt, errs),
         }
     }
 }
@@ -459,38 +489,19 @@ pub enum ObjectFieldDef {
 #[cfg(feature = "json")]
 impl Validate<ObjectFieldDef> for serde_json::Value {
     fn validate(&self, def: &ObjectFieldDef, ctxt: &Context, errs: &mut Vec<Error>) {
-        match (self, def) {
-            (serde_json::Value::Null, ObjectFieldDef::Null) => {}
-            (serde_json::Value::Bool(b), ObjectFieldDef::Boolean(bool_def)) => {
-                b.validate(bool_def, ctxt, errs)
-            }
-            (serde_json::Value::Number(number), ObjectFieldDef::Integer(integer_def)) => {
-                number.validate(integer_def, ctxt, errs)
-            }
-            (serde_json::Value::String(s), ObjectFieldDef::String(string_def)) => {
-                s.validate(string_def, ctxt, errs)
-            }
-            (serde_json::Value::String(_), ObjectFieldDef::Ref(_)) => {}
-            (serde_json::Value::Array(values), ObjectFieldDef::Array(array_def)) => {
-                values.validate(array_def, ctxt, errs)
-            }
-            (serde_json::Value::Object(map), ObjectFieldDef::Object(object_def)) => {
-                map.validate(object_def, ctxt, errs)
-            }
-            (serde_json::Value::Object(map), ObjectFieldDef::Blob(blob_def)) => {
-                map.validate(blob_def, ctxt, errs)
-            }
-            (serde_json::Value::Object(map), ObjectFieldDef::Bytes(bytes_def)) => {
-                map.validate(bytes_def, ctxt, errs)
-            }
-            (serde_json::Value::Object(map), ObjectFieldDef::CidLink(cid_link_def)) => {
-                map.validate(cid_link_def, ctxt, errs)
-            }
-            (serde_json::Value::Object(_), ObjectFieldDef::Unknown(_)) => {}
-            (serde_json::Value::Object(_), ObjectFieldDef::Union(_)) => {}
-            _ => {
-                errs.push(Error::FieldTypeMismatch);
-            }
+        match def {
+            ObjectFieldDef::Null => {}
+            ObjectFieldDef::Boolean(bool_def) => self.validate(bool_def, ctxt, errs),
+            ObjectFieldDef::Integer(integer_def) => self.validate(integer_def, ctxt, errs),
+            ObjectFieldDef::String(string_def) => self.validate(string_def, ctxt, errs),
+            ObjectFieldDef::Bytes(bytes_def) => self.validate(bytes_def, ctxt, errs),
+            ObjectFieldDef::CidLink(cid_link_def) => self.validate(cid_link_def, ctxt, errs),
+            ObjectFieldDef::Array(array_def) => self.validate(array_def, ctxt, errs),
+            ObjectFieldDef::Object(object_def) => self.validate(object_def, ctxt, errs),
+            ObjectFieldDef::Blob(blob_def) => self.validate(blob_def, ctxt, errs),
+            ObjectFieldDef::Ref(ref_def) => self.validate(ref_def, ctxt, errs),
+            ObjectFieldDef::Union(union_def) => self.validate(union_def, ctxt, errs),
+            ObjectFieldDef::Unknown(_) => {}
         }
     }
 }
@@ -514,6 +525,16 @@ impl Validate<BooleanDef> for bool {
                     actual: self.to_string(),
                 });
             }
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl Validate<BooleanDef> for serde_json::Value {
+    fn validate(&self, def: &BooleanDef, ctxt: &Context, errs: &mut Vec<Error>) {
+        match self {
+            serde_json::Value::Bool(b) => b.validate(def, ctxt, errs),
+            _ => errs.push(Error::FieldTypeMismatch),
         }
     }
 }
@@ -567,6 +588,16 @@ impl Validate<IntegerDef> for serde_json::Number {
                 // i64 value range
                 errs.push(Error::ExceedsCapacity);
             }
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl Validate<IntegerDef> for serde_json::Value {
+    fn validate(&self, def: &IntegerDef, ctxt: &Context, errs: &mut Vec<Error>) {
+        match self {
+            serde_json::Value::Number(num) => num.validate(def, ctxt, errs),
+            _ => errs.push(Error::FieldTypeMismatch),
         }
     }
 }
@@ -660,6 +691,16 @@ impl Validate<StringDef> for atrium_api::types::string::Datetime {
     }
 }
 
+#[cfg(feature = "json")]
+impl Validate<StringDef> for serde_json::Value {
+    fn validate(&self, def: &StringDef, ctxt: &Context, errs: &mut Vec<Error>) {
+        match self {
+            serde_json::Value::String(s) => s.validate(def, ctxt, errs),
+            _ => errs.push(Error::FieldTypeMismatch),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BytesDef {
@@ -703,6 +744,16 @@ impl Validate<BytesDef> for serde_json::Map<String, serde_json::Value> {
     }
 }
 
+#[cfg(feature = "json")]
+impl Validate<BytesDef> for serde_json::Value {
+    fn validate(&self, def: &BytesDef, ctxt: &Context, errs: &mut Vec<Error>) {
+        match self {
+            serde_json::Value::Object(obj) => obj.validate(def, ctxt, errs),
+            _ => errs.push(Error::FieldTypeMismatch),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CidLinkDef {
@@ -716,6 +767,16 @@ impl Validate<CidLinkDef> for serde_json::Map<String, serde_json::Value> {
         match self.get("$link") {
             Some(_bytes_value) => {}
             None => errs.push(Error::MissingField("$bytes".to_owned())),
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl Validate<CidLinkDef> for serde_json::Value {
+    fn validate(&self, def: &CidLinkDef, ctxt: &Context, errs: &mut Vec<Error>) {
+        match self {
+            serde_json::Value::Object(obj) => obj.validate(def, ctxt, errs),
+            _ => errs.push(Error::FieldTypeMismatch),
         }
     }
 }
@@ -747,6 +808,19 @@ where
         }
         for value in self {
             value.validate(&def.items, ctxt, errs);
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl<Fields> Validate<ArrayDef<Box<Fields>>> for serde_json::Value
+where
+    serde_json::Value: Validate<Fields>,
+{
+    fn validate(&self, def: &ArrayDef<Box<Fields>>, ctxt: &Context, errs: &mut Vec<Error>) {
+        match self {
+            serde_json::Value::Array(arr) => arr.validate(def, ctxt, errs),
+            _ => errs.push(Error::FieldTypeMismatch),
         }
     }
 }
@@ -882,6 +956,16 @@ impl Validate<BlobDef> for serde_json::Map<String, serde_json::Value> {
                 }
             },
             None => errs.push(Error::MissingField("size".to_owned())),
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl Validate<BlobDef> for serde_json::Value {
+    fn validate(&self, def: &BlobDef, ctxt: &Context, errs: &mut Vec<Error>) {
+        match self {
+            serde_json::Value::Object(obj) => obj.validate(def, ctxt, errs),
+            _ => errs.push(Error::FieldTypeMismatch),
         }
     }
 }

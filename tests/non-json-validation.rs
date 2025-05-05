@@ -4,7 +4,7 @@ validation implemented as part of the "json" feature).
  */
 
 use atproto_validator::{
-    Context, Document, DocumentType, Error, ObjectDef, Validate, ValidateObject,
+    Context, Document, DocumentType, Error, ObjectDef, TopLevelDef, Validate, ValidateObject,
 };
 use atrium_api::types::string::Datetime;
 
@@ -29,6 +29,18 @@ impl<'a> Validate<DocumentType<'a>> for RecordData {
                 expected: doc_type.as_str().to_owned(),
                 actual: self.r#type.clone(),
             });
+        }
+    }
+}
+
+impl Validate<TopLevelDef> for RecordData {
+    fn validate(&self, def: &TopLevelDef, ctxt: &Context, errs: &mut Vec<Error>) {
+        match def {
+            TopLevelDef::Record(record) => self.validate(record, ctxt, errs),
+            _ => errs.push(Error::TypeMismatch {
+                expected: "record".to_owned(),
+                actual: def.type_name().to_owned(),
+            }),
         }
     }
 }
