@@ -2,7 +2,7 @@ use std::{collections::HashMap, ops::Index};
 
 use atrium_api::types::string::Nsid;
 
-use serde::Deserialize;
+use serde::{Deserialize, de};
 use thiserror::Error;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -17,7 +17,7 @@ pub struct Document {
     pub id: Nsid,
     #[allow(dead_code)]
     pub description: Option<String>,
-    pub defs: HashMap<String, PrimaryDef>,
+    pub defs: HashMap<String, TopLevelDef>,
 }
 
 #[derive(Debug, Error)]
@@ -26,6 +26,14 @@ pub enum Error {
     ExpectedObject,
     #[error("missing nsid in context: {0}")]
     MissingNsid(String),
+    #[error("invalid reference: {0}")]
+    InvalidRef(String),
+    #[error("reference not found in context: {0}")]
+    MissingRef(String),
+    #[error("nsid parsing error: {0}")]
+    NsidParse(&'static str),
+    #[error("no reference in union matched schema document in context")]
+    UnfoundRefInUnion,
     #[error("missing field '{0}'")]
     MissingField(String),
     #[error("invalid error type for field '{0}'")]
@@ -120,7 +128,7 @@ pub trait ValidateObject {
 
 impl<T> ValidateObject for T
 where
-    T: for<'a> Validate<DocumentType<'a>> + Validate<PrimaryDef>,
+    T: for<'a> Validate<DocumentType<'a>> + Validate<TopLevelDef>,
 {
     fn validate_object(&self, ctxt: &Context, nsid: &Nsid) -> Result<(), Vec<Error>> {
         let doc = ctxt
@@ -206,17 +214,17 @@ impl Validate<Document> for serde_json::Value {
 //TODO: implement query / procedure / subscription validation
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
-pub enum PrimaryDef {
+pub enum TopLevelDef {
     Record(RecordDef),
 }
 
-impl<T> Validate<PrimaryDef> for T
+impl<T> Validate<TopLevelDef> for T
 where
     T: Validate<RecordDef>,
 {
-    fn validate(&self, def: &PrimaryDef, ctxt: &Context, errs: &mut Vec<Error>) {
+    fn validate(&self, def: &TopLevelDef, ctxt: &Context, errs: &mut Vec<Error>) {
         match def {
-            PrimaryDef::Record(record) => self.validate(record, ctxt, errs),
+            TopLevelDef::Record(record) => self.validate(record, ctxt, errs),
         }
     }
 }
@@ -878,13 +886,80 @@ impl Validate<BlobDef> for serde_json::Map<String, serde_json::Value> {
     }
 }
 
-// TODO: implement ref and union types (which will require multi-document types / validation)
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefDef {
     #[allow(dead_code)]
     pub description: Option<String>,
-    pub r#ref: String,
+    #[serde(deserialize_with = "deserialize_ref")]
+    pub r#ref: Ref,
+}
+
+#[derive(Debug)]
+pub struct Ref {
+    nsid: Nsid,
+    fragment: Option<String>,
+}
+
+impl Ref {
+    pub fn fragment(&self) -> &str {
+        match &self.fragment {
+            Some(fragment) => fragment.as_str(),
+            None => "main",
+        }
+    }
+}
+
+impl std::str::FromStr for Ref {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut split = s.split("#");
+        let nsid_part = split.next().expect("split always has at least one element");
+        let fragment_part = split.next();
+        if split.next().is_some() {
+            // too many '#'
+            return Err(Error::InvalidRef(s.to_owned()));
+        }
+        Ok(Ref {
+            nsid: nsid_part.parse().map_err(Error::NsidParse)?,
+            fragment: fragment_part.map(|s| s.to_owned()),
+        })
+    }
+}
+
+fn deserialize_ref<'de, D>(deserializer: D) -> Result<Ref, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let s: &str = de::Deserialize::deserialize(deserializer)?;
+    s.parse().map_err(de::Error::custom)
+}
+
+impl std::fmt::Display for Ref {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.fragment {
+            Some(fragment) => write!(f, "{}#{}", self.nsid.as_str(), fragment),
+            None => write!(f, "{}", self.nsid.as_str()),
+        }
+    }
+}
+
+impl<T> Validate<RefDef> for T
+where
+    T: Validate<TopLevelDef>,
+{
+    fn validate(&self, def: &RefDef, ctxt: &Context, errs: &mut Vec<Error>) {
+        let Some(doc) = ctxt.get(&def.r#ref.nsid) else {
+            errs.push(Error::MissingRef(def.r#ref.to_string()));
+            return;
+        };
+        let Some(tld) = doc.defs.get(def.r#ref.fragment()) else {
+            errs.push(Error::MissingRef(def.r#ref.to_string()));
+            return;
+        };
+        self.validate(tld, ctxt, errs);
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -892,9 +967,50 @@ pub struct RefDef {
 pub struct UnionDef {
     #[allow(dead_code)]
     pub description: Option<String>,
-    pub refs: Vec<String>,
+    #[serde(deserialize_with = "deserialize_refs")]
+    pub refs: Vec<Ref>,
     #[serde(default)] // defaults to false
     pub closed: bool,
+}
+
+fn deserialize_refs<'de, D>(deserializer: D) -> Result<Vec<Ref>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let mut inputs = Vec::<&str>::deserialize(deserializer)?;
+    let refs = inputs
+        .drain(..)
+        .map(|elem| Ok(elem.parse().map_err(de::Error::custom)?))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(refs)
+}
+
+impl<T> Validate<UnionDef> for T
+where
+    T: for<'a> Validate<DocumentType<'a>> + Validate<TopLevelDef>,
+{
+    fn validate(&self, def: &UnionDef, ctxt: &Context, errs: &mut Vec<Error>) {
+        let mut found = false;
+        for r#ref in &def.refs {
+            let Some(doc) = ctxt.get(&r#ref.nsid) else {
+                continue;
+            };
+            let Some(tld) = doc.defs.get(r#ref.fragment()) else {
+                continue;
+            };
+            let mut potential_errs = vec![];
+            self.validate(&DocumentType(doc.id.as_str()), ctxt, &mut potential_errs);
+            if potential_errs.is_empty() {
+                // we found the ref in the union that matches this object
+                found = true;
+                self.validate(tld, ctxt, errs);
+                break;
+            }
+        }
+        if !found && def.closed {
+            errs.push(Error::UnfoundRefInUnion);
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
