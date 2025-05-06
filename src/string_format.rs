@@ -362,7 +362,7 @@ pub fn validate_generic_nsid_segment(segment: &str) -> Result<(), NsidError> {
 pub fn validate_nsid_auth_segment(segment: &str, first: bool) -> Result<(), NsidError> {
     validate_generic_nsid_segment(segment)?;
     if first
-        && !segment
+        && segment
             .chars()
             .next()
             .expect("non-empty checked")

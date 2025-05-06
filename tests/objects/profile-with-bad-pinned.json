@@ -1,0 +1,25 @@
+{
+    "$type": "app.bsky.actor.profile",
+    "avatar": {
+        "$type": "blob",
+        "ref": {
+            "$link": "bafkreihhpqdyntku66himwor5wlhtdo44hllmngj2ofmbqnm25bdm454wq"
+        },
+        "mimeType": "image/jpeg",
+        "size": 206242
+    },
+    "banner": {
+        "$type": "blob",
+        "ref": {
+            "$link": "bafkreiai3mohqwakra23zdvgihyvyizjdfnf2plev7er5qbzkttgqm5nsy"
+        },
+        "mimeType": "image/jpeg",
+        "size": 213686
+    },
+    "pinnedPost": {
+        "cid": "bafyreif74ecmhyqf2htkdq3nvssqnipwh2vjmbbpgc4i2rthkhtdx23nsi",
+        "uri": "utter:nonsense"
+    },
+    "description": "Developer at Bluesky.",
+    "displayName": "Paul Frazee"
+}
