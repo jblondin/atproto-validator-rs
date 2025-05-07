@@ -472,6 +472,13 @@ impl_prop_get_val!(
     UnknownDef,
     ObjectFieldDef::Unknown
 );
+impl_prop_get_val!(get_ref_prop, validate_ref_prop, RefDef, ObjectFieldDef::Ref);
+impl_prop_get_val!(
+    get_union_prop,
+    validate_union_prop,
+    UnionDef,
+    ObjectFieldDef::Union
+);
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
