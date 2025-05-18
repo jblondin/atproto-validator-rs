@@ -1,16 +1,16 @@
-use atproto_validator::Document;
+use atproto_validator::atrium_lex::LexiconDoc;
 
 pub mod lexicons;
 use lexicons::record_document_json;
 
 #[test]
 fn deserialize_lexicon_docs() {
-    if let Err(e) = serde_json::from_value::<Document>(record_document_json(
+    if let Err(e) = serde_json::from_value::<LexiconDoc>(record_document_json(
         &"xyz.statusphere.status".parse().expect("bad nsid"),
     )) {
         panic!("deserializtion failed: {e}");
     }
-    if let Err(e) = serde_json::from_value::<Document>(record_document_json(
+    if let Err(e) = serde_json::from_value::<LexiconDoc>(record_document_json(
         &"app.bsky.actor.profile".parse().expect("bad nsid"),
     )) {
         panic!("deserializtion failed: {e}");

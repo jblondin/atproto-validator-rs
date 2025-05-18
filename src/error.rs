@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::string_format::FormatError;
+use crate::atrium::string_format::FormatError;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -24,6 +24,8 @@ pub enum Error {
     InvalidField(String),
     #[error("$type mismatch: expected {expected}, found {actual}")]
     TypeMismatch { expected: String, actual: String },
+    #[error("unexpected variant, expected {0}")]
+    UnexpectedVariant(String),
     #[error("no main definition found in lexicon document")]
     MissingMain,
     #[error("missing required property: {0}")]
@@ -41,9 +43,9 @@ pub enum Error {
     #[error("blob size {0} out of bounds min_size={1:?}, max_size={2:?}")]
     SizeOutOfBounds(u64, Option<u64>, Option<u64>),
     #[error("string length {0} outside of bounds min_length={1:?}, max_length={2:?}")]
-    StrLenOutOfBounds(usize, Option<u32>, Option<u32>),
+    StrLenOutOfBounds(usize, Option<usize>, Option<usize>),
     #[error("number of graphemes {0} outside of bounds min_graphemes={1:?}, max_graphemes={2:?}")]
-    NumGraphemeshOutOfBounds(u32, Option<u32>, Option<u32>),
+    NumGraphemeshOutOfBounds(usize, Option<usize>, Option<usize>),
     #[error("array length {0} outside of bounds min_size={1:?}, max_size={2:?}")]
     ArrLenOutOfBounds(usize, Option<usize>, Option<usize>),
     #[error("value not in enumeration")]
@@ -62,9 +64,14 @@ pub enum Error {
 
 #[derive(Debug, Error)]
 #[cfg(feature = "json")]
-pub enum DocCreateError {
+pub enum DocCreateError<E>
+where
+    E: std::fmt::Display,
+{
     #[error("failed to open file: {0}")]
     Io(#[from] std::io::Error),
     #[error("failed to deserialize: {0}")]
     Deserialize(#[from] serde_json::Error),
+    #[error("canonicalization: {0}")]
+    Canonicalize(E),
 }

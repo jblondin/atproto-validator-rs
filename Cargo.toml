@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [dependencies]
 atrium-api = {version = "0.25"}
+atrium-lex = {git = "https://github.com/atrium-rs/atrium.git", rev = "29b42eb2792adc94c5ce1305b14eb5679d05d91c", optional = true}
 chrono = {version = "0.4"}
 ipld-core = {version = "0.4"}
 regex = {version = "1"}

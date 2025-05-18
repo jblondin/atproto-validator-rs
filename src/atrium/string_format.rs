@@ -1,10 +1,10 @@
 use std::{str::FromStr, sync::LazyLock};
 
 use atrium_api::types::string::Cid;
+use atrium_lex::lexicon::LexStringFormat;
 use chrono::DateTime;
 use regex::Regex;
 use serde::Deserialize;
-use thiserror::Error;
 
 use crate::{Context, Error, Validate};
 
@@ -24,14 +24,14 @@ pub enum StringFormat {
     Language,
 }
 
-impl<S> Validate<StringFormat> for S
+impl<S> Validate<LexStringFormat> for S
 where
     S: AsRef<str>,
 {
-    fn validate(&self, format: &StringFormat, _ctxt: &Context, errs: &mut Vec<Error>) {
+    fn validate(&self, format: &LexStringFormat, _ctxt: &Context, errs: &mut Vec<Error>) {
         let s = self.as_ref();
         match format {
-            StringFormat::AtIdentifier => {
+            LexStringFormat::AtIdentifier => {
                 if s.starts_with("did:") {
                     if let Err(e) = validate_did(s) {
                         errs.push(FormatError::Did(e).into());
@@ -42,17 +42,17 @@ where
                     }
                 }
             }
-            StringFormat::AtUri => {
+            LexStringFormat::AtUri => {
                 if let Err(e) = validate_at_uri(s) {
                     errs.push(FormatError::AtUri(e).into());
                 }
             }
-            StringFormat::Cid => {
+            LexStringFormat::Cid => {
                 if let Err(e) = Cid::from_str(s) {
                     errs.push(FormatError::Cid(e).into());
                 }
             }
-            StringFormat::Datetime => {
+            LexStringFormat::Datetime => {
                 // chrono::DateTime's `parse_from_rfc3339` only parses those datetimes in the
                 // overlap between RFC3339 and ISO8601, so this checks both.
                 // technically I think we should also check for valid WHATWG HTML dates, but the
@@ -62,37 +62,37 @@ where
                     errs.push(FormatError::DateTime(e).into());
                 }
             }
-            StringFormat::Did => {
+            LexStringFormat::Did => {
                 if let Err(e) = validate_did(s) {
                     errs.push(FormatError::Did(e).into());
                 }
             }
-            StringFormat::Handle => {
+            LexStringFormat::Handle => {
                 if let Err(e) = validate_handle(s) {
                     errs.push(FormatError::Handle(e).into());
                 }
             }
-            StringFormat::Nsid => {
+            LexStringFormat::Nsid => {
                 if let Err(e) = validate_nsid(s) {
                     errs.push(FormatError::Nsid(e).into())
                 }
             }
-            StringFormat::Tid => {
+            LexStringFormat::Tid => {
                 if let Err(e) = validate_tid(s) {
                     errs.push(FormatError::Tid(e).into());
                 }
             }
-            StringFormat::RecordKey => {
+            LexStringFormat::RecordKey => {
                 if let Err(e) = validate_record_key(s) {
                     errs.push(FormatError::RecordKey(e).into());
                 }
             }
-            StringFormat::Uri => {
+            LexStringFormat::Uri => {
                 if let Err(e) = validate_uri(s) {
                     errs.push(FormatError::Uri(e).into());
                 }
             }
-            StringFormat::Language => {
+            LexStringFormat::Language => {
                 if let Err(e) = validate_language(s) {
                     errs.push(FormatError::Language(e).into());
                 }
@@ -101,7 +101,7 @@ where
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum FormatError {
     #[error("did: {0}")]
     Did(DidError),
@@ -171,7 +171,7 @@ pub fn validate_did(s: impl AsRef<str>) -> Result<(), DidError> {
     Ok(())
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum HandleError {
     #[error("disallowed characters in handle (ASCII letters, digits, hyphen, and period")]
     InvalidChars,
@@ -227,7 +227,7 @@ pub fn validate_handle(s: impl AsRef<str>) -> Result<(), HandleError> {
     Ok(())
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum AtUriError {
     #[error("too long (max 8192 chars")]
     TooLong,
@@ -327,7 +327,7 @@ pub fn validate_at_uri(s: impl AsRef<str>) -> Result<(), AtUriError> {
     Ok(())
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum NsidError {
     #[error("disallowed characters (ASCII letters, digits, hyphens, and periods only)")]
     InvalidChars,
@@ -410,7 +410,7 @@ pub fn validate_nsid(s: impl AsRef<str>) -> Result<(), NsidError> {
     Ok(())
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum TidError {
     #[error("TID must be 13 characters")]
     InvalidLength,
@@ -433,7 +433,7 @@ pub fn validate_tid(s: impl AsRef<str>) -> Result<(), TidError> {
     Ok(())
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum RecordKeyError {
     #[error("record key must be between 1 and 512 characters (inclusive)")]
     InvalidLength,
@@ -459,7 +459,7 @@ pub fn validate_record_key(s: impl AsRef<str>) -> Result<(), RecordKeyError> {
     Ok(())
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum UriError {
     #[error("invalid syntax")]
     InvalidSyntax,
@@ -477,7 +477,7 @@ pub fn validate_uri(s: impl AsRef<str>) -> Result<(), UriError> {
     Ok(())
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum LanguageError {
     #[error("invalid syntax")]
     InvalidSyntax,

@@ -1,8 +1,9 @@
 #![cfg(feature = "json")]
 
 use atproto_validator::{
-    Context, Document, Error, ValidateObject,
-    string_format::{AtUriError, FormatError},
+    Context, Error, FromJsonFile, ValidateObject,
+    atrium::string_format::{AtUriError, FormatError},
+    atrium_lex::LexiconDoc,
 };
 use atrium_api::types::string::Nsid;
 use lexicons::{object_document_reader, record_document_path};
@@ -27,8 +28,9 @@ fn nsids() -> Vec<Nsid> {
 
 fn build_context<'a>(nsids: impl IntoIterator<Item = &'a Nsid>) -> Context {
     Context::from_documents(nsids.into_iter().map(|nsid| {
-        Document::from_json_file(record_document_path(nsid)).expect("unable to load json file")
+        LexiconDoc::from_json_file(record_document_path(nsid)).expect("unable to load json file")
     }))
+    .expect("failed to build context")
 }
 
 fn validate_object(ctxt: &Context, nsid: &Nsid, obj_file: &str) -> Result<(), Vec<Error>> {
